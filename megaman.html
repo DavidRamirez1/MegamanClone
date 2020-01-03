@@ -1,0 +1,735 @@
+<html>
+
+<head>
+<title>HTML5 Canvas &mdash; Simple Megaman Clone</title>
+<meta http-equiv="content-type" content="text/html; charset=UTF8">
+<script type="text/javascript" src="gl-matrix.js"></script>
+<link href = "megaman.css" rel = "stylesheet" type = "text/css">
+
+<style>
+    canvas {border: solid 1px black}
+    td {vertical-align: top;}
+</style>
+</head>
+
+<script type="text/javascript">
+
+// David A. Ramirez 
+// 801105884
+// CCOM4995 - Remi Megret
+//
+// Simple Megaman Clone with Sprite Animations and Level Sprite Scrolling! I for Jump, J for moving to the left, L for the right
+// and Space Bar for shooting
+
+
+window.requestAnimFrame = (function() {
+      return window.requestAnimationFrame ||
+             window.webkitRequestAnimationFrame ||
+             window.mozRequestAnimationFrame ||
+             window.oRequestAnimationFrame ||
+             window.msRequestAnimationFrame ||
+             function(/* function FrameRequestCallback */ callback, /*DOMElement*/ element) {
+               window.setTimeout(callback, 1000/60);
+             };
+})();
+
+    var canvas;
+    var ctx;
+    var w,h;
+   
+    var params; // Will hold all the parameters relevant to the player (Megaman)
+  
+
+    var SPRITE_SIZE = 50 ; // Sprite Size of each frame in the Megaman Sheet. Used to navigate the megaman sheet.
+    var RUNNING_SPEED = 0.45 ; // Speed of Megaman's Run
+
+    var img = new Image();
+    img.src = 'megamansheet.png' ;
+
+    var bulletimg = new Image();
+    bulletimg.src = 'megamanbullet.png' ;
+
+    var backgroundimg = new Image();
+    backgroundimg.src = 'MegaMan2HeatManMapBG.png' ;
+
+    // Frame Sets used for the Megaman animations
+
+    var frame_sets = [[{fx:0,fy:0}, {fx:1,fy:0}], // Standing Idle Animation - 0
+                      [{fx:3, fy:0}, {fx:4, fy:0}, {fx:5, fy:0}, {fx:4, fy:0}], // Running Animation - 1
+                      [{fx:2, fy:1}], // Shooting while Standing - 2
+                      [{fx:3, fy:1}, {fx:4, fy:1}, {fx:5, fy:1}, {fx:4, fy:1}], // Shooting while Running - 3
+                      [{fx:6, fy:0}], // Jumping - 4
+                      [{fx:6, fy:1}]] ; // Shooting while jumping - 5
+
+    
+  // The animation structure. Will hold all the information needed for the sprite sheet animation.
+
+  var Animation = function(frame_set, delay) {
+
+    this.count = 0; // A timer that will decided how long it will take to switch to the next frame. This depends on the set delay
+    this.delay = delay; 
+    this.framex = 0; // This will hold the number of the column of a specific frame in the sprite sheet
+    this.framey = 0; // This will hold the number of the row of a specific frame in the sprite sheet
+    this.frame_index = 0; // Keeps track of where in the frame set we are.
+    this.frame_set = frame_set; // Keeps track of which frame set is being used (Running, Running w/ shooting, Jumping, etc)
+
+  };
+
+  Animation.prototype = {
+
+    // Animation.change is used when we want to change from one frame set to another.
+    // It resets the count, and sets the potentially new delay, aswell as the new frame set.
+    // Used when, for example, we switch from running to idle.
+
+    change:function(frame_set, delay = 15) {
+
+      if (this.frame_set != frame_set) {// If the frame set is different:
+
+        this.count = 0; // Reset the count.
+        this.delay = delay; // Set the delay.
+        this.frame_index = 0; // We want to start in the first frame of the frame set
+        this.frame_set = frame_set;// Set the new frame set.
+        this.framex = this.frame_set[this.frame_index].fx; // Set the new frame value in the x coordinate. (Where in the row the image will be cropped).
+        this.framey = this.frame_set[this.frame_index].fy ; // Set the new frame value in the y coordinate. (Where in the column the image will be cropped).
+
+      }
+
+    },
+
+    change_shootcase:function(frame_set, frame_index, delay = 15){ // We need a special case when Megaman is running and he starts to shoot. If we don't use this, then Megaman will start the run n shoot frames from the start
+                                                      // without depending on where the original running frame was in the running cycle and it will look "stuttery" and akward.
+
+    if (this.frame_set != frame_set) { // If the frame set is different:
+
+        this.count = 0; // Reset the count.
+        this.delay = delay; // Set the delay.
+        this.frame_index = frame_index % 4 ; // This trick is needed to keep the walking cycle smooth as we switch from running frame and shooting w/ running frame. It remembers in which part of the running cycle the other frame set was. This prevents a stuttery run as you shoot.
+        this.frame_set = frame_set; // Set the new frame set.
+        this.framex = this.frame_set[this.frame_index].fx; // Set the column used in the sprite sheet, depending on the frame set
+        this.framey = this.frame_set[this.frame_index].fy ; // Set the row used in the sprite sheet, depending on the frame set.
+
+      }
+
+    },
+
+/* Commented this out. Not needed after all. Shooting_case will do.
+    
+    change_runcase:function(frame_set, frame_index, delay = 15){ // We need a special case when Megaman is running and he starts to shoot. If we don't use this, then Megaman will start the run n shoot frames from the start
+                                                      // without depending on where the original running frame was in the running cycle and it will look "stuttery" and akward.
+
+    if (this.frame_set != frame_set) { // If the frame set is different:
+
+        this.count = 0; // Reset the count.
+        this.delay = delay; // Set the delay.
+        this.frame_index = (frame_index + 1) % 4 ; // This is a trick so that
+        this.frame_set = frame_set; // Set the new frame set.
+        this.framex = this.frame_set[this.frame_index].fx; // Set the column used in the sprite sheet, depending on the frame set
+        this.framey = this.frame_set[this.frame_index].fy ; // Set the row used in the sprite sheet, depending on the frame set.
+
+      }
+
+    },*/
+
+    /* Call this on each game cycle. */
+
+    update:function() {
+
+      this.count += 1 ; // Keeping track how long one frame has been set. This is needed to compare with the delay so
+                        // that we can control how fast the program shifts from frame to frame.
+
+      if (this.count >= this.delay) { // If the count surpasses the delay set, we move on to the next frame.
+
+        this.count = 0; // Reset the count.
+        
+        // If the frame index is on the last value of the frame set, we reset it back to 0
+        // otherwise, add 1 to it (Go to the next frame in the frame set)
+
+       /* if(this.frame_index == this.frame_set.lenght - 1){ // Didn't work for some reason
+            this.frame_index = 0 ;
+        }
+        else{
+            this.frame_index += 1 ;
+        }*/
+
+        this.frame_index = (this.frame_index == this.frame_set.length - 1) ? 0 : this.frame_index + 1;
+
+        this.framex = this.frame_set[this.frame_index].fx; // Change the current frame value in the x coordinate (The column)
+        this.framey = this.frame_set[this.frame_index].fy; // Change the current frame value in the y coordinate (The row)
+
+      }
+
+    }
+
+  };
+
+    // Initialize the level camara. The camara will decide from what position it will start to crop the full level image.
+    // When megaman moves to the right, the camara in the x position will start to update and move to the right.
+
+    function initLevel(){
+        level = {
+            'camara_startx': 0,     // Initial position x that decides where the camara will start cropping the level sprite
+            'camara_starty': 0,     // Initial position y that decides where the camara will start cropping the level sprite
+            'camara_extentx': 255,  // Decides the size of the cropped image. Basically, how big the camara view will be.
+            'camara_extenty': 240,
+           // 'camara_boundary': 0  // Unfortunately not enough time to implement a boundary so Megaman can't go back left after
+                                    // level scrolls.
+        }
+
+        level.updatecamarax = function(){ 
+            this.camara_startx += 1; // Simulate the horizontal scrolling of the level
+           
+        }
+    }
+
+    function initParams() {
+        params = {
+
+            'animation': new Animation(), // Holds the animation structure
+            'framex': 0,     // Which column of the sprite sheet Megaman is in
+            'framey': 0,     // Which row of the sprite sheet Megaman is in
+            'frameindex': 0, // Check on which frame set the player is in currently
+            'jump': false,   // Status of whether Megaman is jumping or not. Same for firing bullets.
+            'fire': false,
+            'jtimer': 0,    // Duration of Jumping frame
+            'movingLeft': false, // Whether megaman is facing left or not. Decides if we flip the images or not, aswell as
+                                 // the direction of Megaman and the bullets.
+
+            // audio
+
+            'jumpsound': new Audio('Mega Man 2 SFX (19).wav'),
+            'pewsound': new Audio('Mega Man 2 SFX (8).wav'),
+
+            // Megaman's position initialized.
+
+            'x0': canvas.width/2,
+            'y0': 405,
+            
+            // Megaman's Velocity
+
+            'vx': 0,
+            'vy': 0,
+           // 'isDown': false,
+
+            // Our controls
+
+            'key':{},
+            'up': 73,
+            'left': 74,
+            'down': 75,
+            'right': 76,
+            'bullet': 32, 
+
+            // Bullet's information. Probably should've done it as a different structure and not inside params.
+
+            'bx': 100,
+            'by': 100,
+            'bvx': 0,
+            'bvy': 0,
+            'bullet_time': 0,
+            'bulletVelocity': 10,
+            'fired': false, // To know whether or not Megaman shot the bullet. This is used to know when to use the shooting frame
+                            // aswell as to know when to shoot the bullet.
+           // 'btimer': 0,
+
+          
+        }
+    }
+   
+    
+    function onParamsChange() {
+        drawAll();
+    }
+
+    /* ### Keyboard ### */
+    
+    var currentlyPressedKeys = {};
+    
+    function initKeys(canvas) {
+        // Make sure the canvas can receive the key events
+        canvas.setAttribute('tabindex','0');
+        canvas.focus();
+
+        // Register the keyDown and keyUp events
+        canvas.addEventListener( "keydown", onKeyDown, true);
+        canvas.addEventListener( "keyup", onKeyUp, true);
+    }
+    
+    // Callbacks for discrete key events
+    
+    function onKeyDown(event) {
+        // Uncomment this to display key presses to find the keyCodes
+        console.log(event)
+        event.preventDefault();
+    
+        // Set the corresponding key state to true when that key is pushed. Relevant for Mode 2
+
+        params.key[event.keyCode] = true ;
+
+        // Handle single key presses (for example for firing the gun)
+
+        if (event.keyCode == 32){ // Spacebar
+           
+            new Audio('Mega Man 2 SFX (8).wav').play(); // For some reason if I don't use it this way, the bullet sound won't come out sometimes.
+           // params.pewsound.play(); // Play the pew sound when Megaman shoots the bullet
+            
+            params.fired = true ; // Fired state is set to true, which will trigger the 'Megaman Shooting' frames in the sprite sheet
+          //  params.btimer = 0 ;
+
+            if(params.movingLeft == true){ // If Megaman is facing left, change the bullets initial position and velocity accordingly
+
+                params.bulletVelocity = -10 ;
+                params.bx = params.x0 -  15;  // Hardcoded parameters so the bullet's initial position starts roughly from
+                params.by = params.y0 +  34 ; // Megaman's buster.
+            }
+            else{ // If Megaman is facing right, change the bullets initial position and velocity accordingly.
+                
+                params.bx = params.x0 +  64;  // Hardcoded parameters for the bullet but when megaman is shooting to the right.
+                params.by = params.y0 +  34 ;
+                params.bulletVelocity = 10 ;
+            }
+
+            // Set the bullet velocity in the x position to the fixed bullet velocity
+
+            params.bvx = params.bulletVelocity ;
+
+           
+        }
+
+    }
+
+    function onKeyUp(event) {
+        
+        // Change the keystate of whatever key was down to false
+
+        params.key[event.keyCode] = false ;
+    }
+
+    function isKeyDown(keyCode) {
+
+        // Returns the state of the specified Keycode. Returns either true or false.
+
+        return params.key[keyCode];
+
+    }
+
+    /* ### Timing and main loop ### */
+
+    var startTime = 0;
+    var lastTime = 0;
+    var elapsed = 0, totalElapsed = 0;
+
+    function updateTime() {
+        var timeNow = new Date().getTime() / 1000; // All expressed in seconds
+        if (lastTime != 0) {
+            elapsed = timeNow - lastTime;
+        } else {
+            startTime = timeNow;
+        }
+        lastTime = timeNow;
+        totalElapsed = timeNow - startTime;
+    }
+
+    // Timer callback for animations
+
+    function onTick() {
+
+        updateTime();
+        animate();
+        drawAll();
+    
+
+        requestAnimFrame(onTick);
+    }
+
+    // To animate Megaman, check the keyboard state by polling
+
+    function animate() {
+
+        // Keyboard Polling
+
+        if(params.jump == true && params.jtimer <= 33){ // Using a timer to keep track how long the jumping frame will last
+                                                        // The jumping is still a bit buggy and might seem some work. You will
+                                                        // see if you keep the I key pressed.
+
+            params.jtimer += 1;
+
+        }
+
+        else if(params.jump == true){ // If time's up, change jump to false, and allow megaman to switch frames according to controls.
+
+            params.jtimer = 0 ;  // Reset timer and change jump state
+            params.jump = false;
+            new Audio('Mega Man 2 SFX (19).wav').play() ; // Apperantly this way works better and is more responsive than using a variable that holds the audio.
+
+           // params.jumpsound.play();
+           // params.animation.change(frame_sets[0], 15) ;
+        }
+
+       /* if(params.jump){
+
+            if(params.animation.count >= 25){
+                params.jump = false ;
+                params.animation.change(frame_sets[0], 15);
+            }
+        }*/
+
+        // When player is on the ground and jumps without shooting. Make sure player isn't already jumping
+        // to prevent multi-jumping
+
+        if(isKeyDown(params.up) && !params.jump && !isKeyDown(params.bullet)){
+
+             params.animation.change(frame_sets[4], 15) ; // Changes the frame set to jumping animation
+             params.jump = true ; // Change jumping state
+             params.vy -= 30 ; // Jumping velocity
+
+        }
+
+        // If the player is jumping and shoots, change to Megaman-Shooting-While-Jumping frame set
+
+        if(params.jump && isKeyDown(params.bullet)){
+           // params.pewsound.play();
+            params.animation.change(frame_sets[5], 15) ;  // Changing frame set.
+        //    params.jump = true ;
+         //   params.vy -= 25 ;
+
+        }
+
+        // If megaman is moving left but not shooting
+
+        if(isKeyDown(params.left) && !isKeyDown(params.bullet)){          
+
+            params.movingLeft = true;  // State changed so that the program 
+
+            if(!params.jump){
+                params.animation.change(frame_sets[1], 7);
+            }
+
+            params.vx -= RUNNING_SPEED ; // Move megaman to the left
+        }
+
+        // If Megaman is moving left and shooting
+
+        if(isKeyDown(params.left) && isKeyDown(params.bullet)){          
+
+           // params.pewsound.play();
+            params.movingLeft = true;
+
+            if(!params.jump){
+               // params.animation.change(frame_sets[3], 7);
+               params.animation.change_shootcase(frame_sets[3], params.animation.frame_index, 7); // Running Frame Set
+            }
+
+            params.vx -= RUNNING_SPEED ; // Move Megaman to the left
+        }
+
+        // When Megaman is moving right but not shooting
+
+        if(isKeyDown(params.right) && !isKeyDown(params.bullet)){
+
+            params.movingLeft = false;
+
+            if(!params.jump){ // If Megaman is not jumping, we change to the running animation. Megaman can't run on air!
+
+                if(params.animation.frame_set == frame_sets[3]){ // If Megaman is in the middle of shooting and running, we don't want to interrupt 
+                                                                 // the running animation it has, so we use change_shootcase to remember at 
+                                                                 // what index the running animation was and continue from there
+                                                                 // to keep the movement fluid.
+
+                    params.animation.change_shootcase(frame_sets[1], params.animation.frame_index, 7); // Running Frameset
+                }
+
+                else{
+
+                params.animation.change(frame_sets[1], 7);} // Otherwise just change the frameset normally.
+            }
+
+            if(params.x0 <= canvas.width/2){ // Move right only when Megaman hasn't reached the middle. If on the middle, the level will scroll and megaman will stay in place, instead.
+            params.vx += RUNNING_SPEED ;}
+
+            else{
+
+                // If Megaman reached the middle, to follow how the game originally worked, we no longer update the position of megaman
+                // and we start to scroll the level, instead.
+
+                level.updatecamarax();
+            } 
+        }
+
+        // When Megaman is moving right and shooting
+
+        if(isKeyDown(params.right) && isKeyDown(params.bullet)){
+
+            if(!params.jump){
+
+              params.animation.change_shootcase(frame_sets[3], params.animation.frame_index, 7); // Running w/ Shooting frameset
+
+              // params.animation.change(frame_sets[3], 7); Keeping it for legacy. Using this didn't keep in mind
+              // in what part of the running animation megaman was, so it gave it a 'stuttery' feel.
+            }
+
+            // Checks if Megaman is behind the middle line of the canvas. If it is, Megaman can move normally
+            // If not, then this means Megaman is in the middle and trying to run to the right. 
+            // And so instead of updating the velocity, we move the camara which gives it the level scrolling sensation
+
+            if(params.x0 <= canvas.width/2){
+            params.vx += RUNNING_SPEED ;}
+
+            else{
+                level.updatecamarax();
+            }
+
+
+        }
+
+        // When Megaman is shooting but not moving (Running or Jumping) change to the appropriate frame set. (Shoot w/ standing) 
+
+        if(!isKeyDown(params.right) && !isKeyDown(params.left) && !isKeyDown(params.up) && isKeyDown(params.bullet) && !params.jump){
+            params.jump = false ;
+            params.animation.change(frame_sets[2], 15); // Shoot w/ standing frame set
+        }
+
+        // When Megaman is not moving or shooting, start idle animation.
+
+        if(!isKeyDown(params.right) && !isKeyDown(params.left) && !isKeyDown(params.up) && !isKeyDown(params.bullet) && !params.jump){
+            params.jump = false ;
+            params.animation.change(frame_sets[0], 50 ); // Idle animation frame set
+        }
+
+    
+        // If megaman is above ground, push him down until he hits the ground level. In this case, its defined as y = 405,
+        // This ground level would naturally change as you scroll through the level, so in a full version 405 should be
+        // contained either in a variable or in an array containing the numerous ground boundaries of the level, which would change
+        // given how far you are into the stage.
+
+        // If Player is above the ground, push him down (Gravity!)
+
+       if(params.y0 <= 405 && params.jump){
+
+          params.vy += 1 ;
+
+       }
+       
+       else{ // Otherwise, stop falling down and set params.y to ground level.
+        params.vy = 0 ;
+        params.y0 = 405 ;
+     
+
+       }
+
+        // Update Megamas Position according to the vx and vy set.
+
+        params.x0 += params.vx;
+        params.y0 += params.vy;
+
+        // Gives it a very subtle slippery feel that I like. And relevant for some of the Megaman Stages.
+        // It's possible to remove this to give it a more strict movement, but we'd have to tweak some of the numbers. 
+
+        params.vx *= 0.9;  
+        params.vy *= 0.9;
+
+         if(params.fired){
+                params.bx += params.bulletVelocity ;
+
+            }
+
+        // After changing into the frame set needed, update the animation.
+
+        params.animation.update();
+        
+    }
+
+
+    function BoundCheck(x0, y0){
+
+        //Not used in this iteration, but I could probably repurpose this to check bounds in the stage and whatnot.
+/*
+        if(params.x0 < 0){
+
+            params.x0 += canvas.width ;
+        }
+
+        if(params.y0 < 0){
+
+            params.y0 += canvas.height ;
+        }
+
+        if(params.x0 > canvas.width){
+
+            params.x0 -= canvas.width ;
+
+        }
+
+        if(params.y0 > canvas.height){
+
+            params.y0 -= canvas.height ;
+        }
+
+        // Do the same for the bullet's position.
+
+        if(params.bx < 0){
+
+            params.bx += canvas.width ;
+        }
+
+        if(params.by < 0){
+
+            params.by += canvas.height ;
+        }
+
+        if(params.bx > canvas.width){
+
+            params.bx -= canvas.width ;
+        }
+
+        if(params.by > canvas.height){
+
+            params.by -= canvas.height ;
+        }*/
+
+    }
+ 
+    function drawBullet(ctx){
+
+        // Reset transform
+
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.beginPath();
+
+        // Translate the bullet into the assigned position bx and by 
+        // initialized to x0 and y0.
+
+        ctx.translate(params.bx, params.by) ;
+        ctx.drawImage(bulletimg, 15, 300, 18, 18, -50, -50, 35, 35) ; // 15, 300 represents the position where the image is being cropped from, 18 and 18 is how much is being cropped from the image.
+    
+    }
+
+    // Defines the image used for the player. In this case, Megaman!
+
+    function drawMegaman(ctx) {
+
+        // Reset transformations
+
+        ctx.setTransform(1,0, 0,1, 0,0)
+        ctx.beginPath();
+
+        ctx.translate(params.x0, params.y0); // Translate to the player's current position
+
+        if(params.movingLeft){ // If megaman is moving left, we have to flip the images before translating so that the sprite
+                               // faces the correct direction!
+
+            ctx.scale(-1,1); // Flip the image
+            ctx.translate(20,0); // Shift the image a little bit for the turn to look natural!
+        }
+
+        // Draw the chosen megaman frame. SPRITE_SIZE * framex and framey decides which frame is drawn. 50, 50 is the size of the image,
+        // and 120, 120 is how much the image is scaled up from its original size.
+
+        ctx.drawImage(img, SPRITE_SIZE * params.animation.framex, SPRITE_SIZE * params.animation.framey , 50, 50, -50, -50, 120, 120);
+
+     
+
+    }
+
+    function drawAll() {
+        
+        // Reset transform before clearing the canvas
+       
+       ctx.setTransform(1,0,0, 1,0,0)
+       ctx.clearRect(0,0,canvas.width, canvas.height); // Clean the canvas before redrawing
+
+       // Draw the stage sprites. Which part of the stage sprites is cropped from the stage image is decided by level.camara_startx and level.camara_starty. This will be constantly updated when megaman is moving to the right
+       // when he reaches the middle of the stage.
+
+       // How much of the stage is shown on the canvas is decided by level.camara_extentx and level.camara_extenty.
+
+       ctx.drawImage(backgroundimg, level.camara_startx , level.camara_starty , level.camara_extentx, level.camara_extenty, 0, 0, 800, 600);
+
+       ctx.beginPath();
+
+       drawMegaman(ctx);
+
+        // If params.fired is true, it draws the bullet, otherwise don't.
+
+        if(params.fired){
+
+            drawBullet(ctx);
+        }
+    }
+
+    // Initialize Heat Man Theme Loop! Tuturu Tu Tu Tu Tururu!
+
+    function initMusic(){
+        var audio = new Audio('07 - heat man.mp3');
+        audio.loop = true ;
+        audio.play();
+    }
+
+    /* ### Initialization ### */ 
+    
+    function start() {
+        
+        canvas = document.getElementById('canvas');
+        ctx = canvas.getContext('2d');
+        
+        w = canvas.width;
+        h = canvas.height;
+
+        // Do init
+
+        initMusic(); // Initializing Music Loop
+        initLevel(); // Initializing Level Parameters
+        initParams(); // Initializing Player
+        initKeys(canvas);
+        
+        // Draw for the first time
+        
+        drawAll();
+        
+        // Launch main animation loop
+        
+        onTick();
+    }
+
+</script>
+
+<body onload="start();">
+    <h2>David A. Ramirez - Megaman</h2>
+    <table><tbody><tr>
+    
+    <td>
+    <table><tbody>
+    <tr>
+    <td><canvas id="canvas" width="800" height="600"></canvas></td>
+    </tr>
+    <tr>
+    <td>Canvas</td>
+    </tr>
+    <tr>
+    <td><small><span id="text">
+    <h4>Description</h4>
+    At loading: Draws Megaman on the Heatman stage. As you move to the right, the level will scroll forward<br>
+    <p></p>
+    This simulates a Megaman 2 stage with similar controls and features. Has most of the sprites used in the original
+    Megaman games.
+    <p></p>
+    <br>
+    <p></p>
+    <h4>Key Press:</h4> 
+    <p></p>
+    "I": Jump upwards
+    <p></p>
+    "K": Propel the spaceship backward.
+    <p></p>
+    "J": Move megaman to the right.
+    <p></p>
+    "L": Move megaman to the left.
+    <p></p>
+    "Spacebar": Shoots a bullet.
+    <p></p>
+    </span></small></td>
+    </tr>
+    </tbody></table>
+    </td>
+
+</body>
+</html>   
